@@ -1,31 +1,67 @@
 Import-Module OperationsManager
-# Si corres esto desde otra máquina:
+# Si lo ejecutas desde otra máquina:
 # New-SCOMManagementGroupConnection -ComputerName "TU-MGMT-SERVER"
 
-$results = Get-SCOMMonitor | ForEach-Object {
-    $m = $_
+$monitors = Get-SCOMMonitor
+
+$results = foreach ($m in $monitors) {
 
     $targetDisplayName = $null
-    $targetClassName   = $null
-    $targetType        = "Class"
+    $targetName        = $null
+    $targetType        = $null
 
-    try {
+    # 1) Intenta sacar Target directo si viene poblado
+    if ($m.Target -and $m.Target.Name) {
         $targetDisplayName = $m.Target.DisplayName
-        $targetClassName   = $m.Target.Name   # 👈 nombre interno de la clase
+        $targetName        = $m.Target.Name
+        $targetType        = "Class"
+    }
+    else {
+        # 2) Resolver por ID (lo más confiable en 2019)
+        $targetId = $null
 
-        if ($m.Target.BaseTypes -and
-            ($m.Target.BaseTypes.Name -contains "Microsoft.SystemCenter.InstanceGroup")) {
-            $targetType = "Group"
+        # Distintas builds exponen TargetId diferente; probamos varias
+        if ($m.PSObject.Properties.Match("TargetId").Count -gt 0) {
+            $targetId = $m.TargetId
+        } elseif ($m.PSObject.Properties.Match("Target").Count -gt 0 -and $m.Target) {
+            # a veces Target viene como GUID/string
+            $targetId = $m.Target
+        }
+
+        if ($targetId) {
+            # 2a) Primero intenta como CLASE
+            $cls = $null
+            try { $cls = Get-SCOMClass -Id $targetId -ErrorAction Stop } catch {}
+
+            if ($cls) {
+                $targetDisplayName = $cls.DisplayName
+                $targetName        = $cls.Name
+                $targetType        = "Class"
+            }
+            else {
+                # 2b) Si no es clase, intenta como GRUPO
+                $grp = $null
+                try { $grp = Get-SCOMGroup -Id $targetId -ErrorAction Stop } catch {}
+
+                if ($grp) {
+                    $targetDisplayName = $grp.DisplayName
+                    $targetName        = $grp.Name
+                    $targetType        = "Group"
+                }
+                else {
+                    $targetDisplayName = $null
+                    $targetName        = $null
+                    $targetType        = "Unknown"
+                }
+            }
+        }
+        else {
+            $targetType = "Unknown"
         }
     }
-    catch {
-        $targetDisplayName = $m.Target
-        $targetClassName   = $null
-        $targetType        = "Unknown"
-    }
 
+    # Alert settings
     $alertSettings = $m.AlertSettings
-
     $generatesAlert = $false
     $alertOnState   = $null
     $priority       = $null
@@ -35,10 +71,7 @@ $results = Get-SCOMMonitor | ForEach-Object {
         $alertOnState = $alertSettings.AlertOnState
         $priority     = $alertSettings.AlertPriority
         $severity     = $alertSettings.AlertSeverity
-
-        if ($alertOnState -and ($alertOnState.ToString() -ne "None")) {
-            $generatesAlert = $true
-        }
+        if ($alertOnState -and ($alertOnState.ToString() -ne "None")) { $generatesAlert = $true }
     }
 
     [pscustomobject]@{
@@ -48,7 +81,7 @@ $results = Get-SCOMMonitor | ForEach-Object {
         ManagementPack     = $m.ManagementPackName
 
         TargetDisplayName  = $targetDisplayName
-        TargetClassName    = $targetClassName   # 👈 lo que pedías
+        TargetName         = $targetName
         TargetType         = $targetType
 
         GeneratesAlert     = $generatesAlert
@@ -59,6 +92,5 @@ $results = Get-SCOMMonitor | ForEach-Object {
 }
 
 $results |
-    Sort-Object ManagementPack, MonitorDisplayName |
-    Export-Csv "C:\Temp\SCOM_Monitors_With_TargetClass.csv" `
-        -NoTypeInformation -Encoding UTF8
+  Sort-Object ManagementPack, MonitorDisplayName |
+  Export-Csv "C:\Temp\SCOM2019_Monitors_With_Target.csv" -NoTypeInformation -Encoding UTF8

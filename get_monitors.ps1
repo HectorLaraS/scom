@@ -1,60 +1,64 @@
 Import-Module OperationsManager
-# Si lo ejecutas remoto:
+# Si corres esto desde otra máquina:
 # New-SCOMManagementGroupConnection -ComputerName "TU-MGMT-SERVER"
 
-$out = Get-SCOMMonitor | ForEach-Object {
+$results = Get-SCOMMonitor | ForEach-Object {
     $m = $_
 
-    $targetName = $null
-    $targetType = $null
+    $targetDisplayName = $null
+    $targetClassName   = $null
+    $targetType        = "Class"
 
     try {
-        # Target suele ser una clase (ManagementPackClass)
-        $targetName = $m.Target.DisplayName
-        $targetType = "Class"
+        $targetDisplayName = $m.Target.DisplayName
+        $targetClassName   = $m.Target.Name   # 👈 nombre interno de la clase
 
-        # Si el target hereda de InstanceGroup, lo marcamos como "Group"
-        # (algunos ambientes devuelven BaseTypes; si no, no truena el script)
-        if ($m.Target.BaseTypes -and ($m.Target.BaseTypes.Name -contains "Microsoft.SystemCenter.InstanceGroup")) {
+        if ($m.Target.BaseTypes -and
+            ($m.Target.BaseTypes.Name -contains "Microsoft.SystemCenter.InstanceGroup")) {
             $targetType = "Group"
         }
-    } catch {
-        $targetName = $m.Target
-        $targetType = "Unknown"
+    }
+    catch {
+        $targetDisplayName = $m.Target
+        $targetClassName   = $null
+        $targetType        = "Unknown"
     }
 
     $alertSettings = $m.AlertSettings
 
     $generatesAlert = $false
-    $alertOnState = $null
-    $priority = $null
-    $severity = $null
+    $alertOnState   = $null
+    $priority       = $null
+    $severity       = $null
 
     if ($alertSettings) {
         $alertOnState = $alertSettings.AlertOnState
         $priority     = $alertSettings.AlertPriority
         $severity     = $alertSettings.AlertSeverity
 
-        # Normalmente: si AlertOnState viene seteado, el monitor genera alerta
-        if ($alertOnState -and ($alertOnState.ToString() -notmatch "None")) {
+        if ($alertOnState -and ($alertOnState.ToString() -ne "None")) {
             $generatesAlert = $true
         }
     }
 
     [pscustomobject]@{
-        DisplayName        = $m.DisplayName
-        Name               = $m.Name
-        Enabled            = $m.Enabled                 # "esta activa"
+        MonitorDisplayName = $m.DisplayName
+        MonitorName        = $m.Name
+        Enabled            = $m.Enabled
         ManagementPack     = $m.ManagementPackName
-        Target             = $targetName                # clase / grupo target
-        TargetType         = $targetType                # Class o Group
-        GeneratesAlert     = $generatesAlert            # "genera alerta"
+
+        TargetDisplayName  = $targetDisplayName
+        TargetClassName    = $targetClassName   # 👈 lo que pedías
+        TargetType         = $targetType
+
+        GeneratesAlert     = $generatesAlert
         AlertOnState       = $alertOnState
         Priority           = $priority
         Severity           = $severity
     }
 }
 
-$out |
-  Sort-Object ManagementPack, DisplayName |
-  Export-Csv "C:\Temp\SCOM_Monitors_Detail.csv" -NoTypeInformation -Encoding UTF8
+$results |
+    Sort-Object ManagementPack, MonitorDisplayName |
+    Export-Csv "C:\Temp\SCOM_Monitors_With_TargetClass.csv" `
+        -NoTypeInformation -Encoding UTF8
